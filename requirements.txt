@@ -1,0 +1,7 @@
+openpyxl==3.1.5
+# 2.2.3 не всегда имеет готовый wheel для свежих Python; 2.3.x — ок на 3.11–3.14
+pandas>=2.2.3,<3.1
+customtkinter==5.2.2
+loguru==0.7.2
+pyinstaller>=6.11.1
+pytest>=8.3.3
