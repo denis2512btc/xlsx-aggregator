@@ -8,9 +8,9 @@ import pytest
 from openpyxl import load_workbook
 
 from src.core.config import (
+    AUTOFILTER_EXACT_SHEETS,
     BLOCK_MARKER_PREFIX,
     TARGET_SHEET_YQ,
-    YQJDATA_BASE_SHEET,
 )
 from src.core.pipeline import detect_mode, run_pipeline
 
@@ -55,6 +55,16 @@ def test_yq_pipeline_produces_all_blocks(yq_file):
         assert any("YQJDATA" in m for m in markers), f"Блок YQJDATA не найден; маркеры: {markers}"
 
         assert ws.auto_filter.ref is not None, "Автофильтр не наложен"
+        assert ws.column_dimensions["A"].width is not None, "Ширина колонок YQ2PF не выставлена"
+
+        required_filter_sheets = {"SCPF", "S5PF", "YYR6PF", "YSAPF", "YR7PF", "YQJPF", "YQKPF", "JUHPF", "JUPF"}
+        for name in required_filter_sheets:
+            assert name in wb.sheetnames, f"В фикстуре отсутствует лист {name}"
+            assert wb[name].auto_filter.ref is not None, f"Автофильтр не установлен на {name}"
+
+        for name in AUTOFILTER_EXACT_SHEETS:
+            if name in wb.sheetnames:
+                assert wb[name].auto_filter.ref is not None, f"Автофильтр не установлен на {name}"
     finally:
         wb.close()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import pandas as pd
 from loguru import logger
 from openpyxl.styles import Font
@@ -15,12 +16,17 @@ from src.core.config import (
     BLOCK_MARKER_PREFIX,
     BLOCK_MARKER_SUFFIX,
     ACCOUNT_COMPUTED_HEADER,
+    AUTOFILTER_EXACT_SHEETS,
+    AUTO_WIDTH_TARGET_SHEETS,
+    DATA_START_ROW,
+    HEADER_ROW,
     TARGET_SHEET,
     YQJDATA_FILTER_FIELD,
     YQJDATA_FILTER_VALUE,
 )
 
 bold = Font(bold=True)
+_SHEET_S_ONE_CHAR_PF_RE = re.compile(r"^S.PF$")
 
 
 def _strip_previous_run(ws: Worksheet) -> None:
@@ -69,6 +75,68 @@ def _apply_workbook_calc_flags(wb: Workbook) -> None:
         logger.debug("Не удалось выставить calcMode: {}", e)
 
 
+def apply_post_formatting(wb: Workbook, *, target_sheet: str) -> None:
+    """Применяет пост-форматирование: автоширина + автофильтры по списку листов."""
+    if target_sheet in AUTO_WIDTH_TARGET_SHEETS and target_sheet in wb.sheetnames:
+        _autofit_sheet_columns(wb[target_sheet])
+    _apply_autofilters_to_pf_sheets(wb)
+
+
+def _autofit_sheet_columns(ws: Worksheet, *, min_width: int = 8, max_width: int = 60) -> None:
+    """Подбирает ширину колонок по максимальной длине значений в строках 2..max_row."""
+    last_col = 0
+    for c in range(1, (ws.max_column or 0) + 1):
+        if ws.cell(row=HEADER_ROW, column=c).value not in (None, ""):
+            last_col = c
+    if last_col == 0:
+        return
+
+    for c in range(1, last_col + 1):
+        max_len = 0
+        for r in range(HEADER_ROW, ws.max_row + 1):
+            val = ws.cell(row=r, column=c).value
+            if val is None:
+                continue
+            ln = len(str(val).strip())
+            if ln > max_len:
+                max_len = ln
+        width = min(max(min_width, max_len + 2), max_width)
+        ws.column_dimensions[get_column_letter(c)].width = width
+
+
+def _apply_autofilters_to_pf_sheets(wb: Workbook) -> None:
+    """Ставит автофильтр на S?PF и на фиксированный список листов."""
+    for name in wb.sheetnames:
+        if not _sheet_needs_autofilter(name):
+            continue
+        _set_sheet_autofilter(wb[name])
+
+
+def _sheet_needs_autofilter(sheet_name: str) -> bool:
+    return bool(_SHEET_S_ONE_CHAR_PF_RE.match(sheet_name)) or sheet_name in AUTOFILTER_EXACT_SHEETS
+
+
+def _set_sheet_autofilter(ws: Worksheet) -> None:
+    """Устанавливает ref автофильтра от A2 до последней колонки/строки данных."""
+    last_col = 0
+    for c in range(1, (ws.max_column or 0) + 1):
+        if ws.cell(row=HEADER_ROW, column=c).value not in (None, ""):
+            last_col = c
+    if last_col == 0:
+        return
+
+    last_data_row = HEADER_ROW
+    for r in range(ws.max_row, DATA_START_ROW - 1, -1):
+        if any(
+            ws.cell(row=r, column=c).value not in (None, "")
+            for c in range(1, last_col + 1)
+        ):
+            last_data_row = r
+            break
+    end_col = get_column_letter(last_col)
+    ws.auto_filter.ref = f"A{HEADER_ROW}:{end_col}{last_data_row}"
+
+
 def write_to_yw2pf(
     wb: Workbook,
     ordered_blocks: list[tuple[str, list, list[dict]]],
@@ -93,7 +161,8 @@ def write_to_yw2pf(
         yqj_df: Объединённая таблица YQJDATA (только YQ-режим); если передана —
             пишется после ACCOUNTS с автофильтром и pre-set YQJSTS ≠ «А».
     """
-    ws = wb[target_sheet or TARGET_SHEET]
+    resolved_target_sheet = target_sheet or TARGET_SHEET
+    ws = wb[resolved_target_sheet]
     _strip_previous_run(ws)
 
     cursor = _find_last_nonempty_row(ws) + 1 + BLOCK_GAP
@@ -114,7 +183,7 @@ def write_to_yw2pf(
             cursor += 1
         cursor += BLOCK_GAP
 
-    sheet_label = target_sheet or TARGET_SHEET
+    sheet_label = resolved_target_sheet
     if account_df is None or account_df.empty:
         logger.info("Счетов нет — блок ACCOUNTS на {} не записывается.", sheet_label)
     else:
@@ -123,6 +192,7 @@ def write_to_yw2pf(
     if yqj_df is not None and not yqj_df.empty:
         _write_yqjdata_block(ws, yqj_df, cursor)
 
+    apply_post_formatting(wb, target_sheet=resolved_target_sheet)
     _apply_workbook_calc_flags(wb)
 
 
