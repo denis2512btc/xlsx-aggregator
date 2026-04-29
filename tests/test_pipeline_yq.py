@@ -36,7 +36,7 @@ def test_yq_pipeline_produces_all_blocks(yq_file):
     result = run_pipeline(yq_file)
 
     assert result.result_path == yq_file
-    assert result.backup_path and result.backup_path != yq_file
+    assert result.backup_path == yq_file
 
     wb = load_workbook(yq_file)
     try:
@@ -56,6 +56,7 @@ def test_yq_pipeline_produces_all_blocks(yq_file):
 
         assert ws.auto_filter.ref is not None, "Автофильтр не наложен"
         assert ws.column_dimensions["A"].width is not None, "Ширина колонок YQ2PF не выставлена"
+        assert wb.active.title == TARGET_SHEET_YQ, "Активный лист должен быть YQ2PF"
 
         required_filter_sheets = {"SCPF", "S5PF", "YYR6PF", "YSAPF", "YR7PF", "YQJPF", "YQKPF", "JUHPF", "JUPF"}
         for name in required_filter_sheets:
@@ -69,20 +70,21 @@ def test_yq_pipeline_produces_all_blocks(yq_file):
         wb.close()
 
 
-def test_yq_pipeline_idempotent(yq_file):
-    """Повторный запуск не удваивает блоки."""
-    run_pipeline(yq_file)
-    run_pipeline(yq_file)
-
+def test_yq_pipeline_rejects_already_processed_file(yq_file):
     wb = load_workbook(yq_file)
     try:
         ws = wb[TARGET_SHEET_YQ]
-        yqjdata_count = sum(
-            1
-            for r in range(1, ws.max_row + 1)
-            if isinstance(ws.cell(row=r, column=1).value, str)
-            and "YQJDATA" in ws.cell(row=r, column=1).value
-        )
-        assert yqjdata_count == 1, f"Ожидался 1 блок YQJDATA, найдено: {yqjdata_count}"
+        ws.cell(row=4, column=1, value="already-processed-tail")
+        wb.save(yq_file)
     finally:
         wb.close()
+
+    with pytest.raises(RuntimeError, match="Файл уже обрабатывался"):
+        run_pipeline(yq_file)
+
+
+def test_yq_pipeline_second_run_blocked(yq_file):
+    """Повторный запуск блокируется по правилу «файл уже обрабатывался»."""
+    run_pipeline(yq_file)
+    with pytest.raises(RuntimeError, match="Файл уже обрабатывался"):
+        run_pipeline(yq_file)

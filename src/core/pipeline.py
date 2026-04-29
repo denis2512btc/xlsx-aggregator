@@ -24,6 +24,7 @@ from src.core.config import (
     ACCOUNT_SOURCE_SHEETS_YQ,
     CONDITIONAL_APPEND,
     MAKE_BACKUP,
+    DATA_START_ROW,
     S5_SHEET,
     SC_SHEET,
     TARGET_SHEET,
@@ -86,6 +87,8 @@ def _run_yq_pipeline(wb: Workbook, path: Path, progress: "ProgressFn | None") ->
 
     if TARGET_SHEET_YQ not in wb.sheetnames:
         raise RuntimeError(f"В книге отсутствует лист {TARGET_SHEET_YQ}.")
+    if _target_sheet_has_tail_data(wb, TARGET_SHEET_YQ):
+        raise RuntimeError("Файл уже обрабатывался.")
     if SC_SHEET not in wb.sheetnames:
         raise RuntimeError("В книге отсутствует обязательный лист SCPF.")
 
@@ -151,13 +154,14 @@ def _run_yq_pipeline(wb: Workbook, path: Path, progress: "ProgressFn | None") ->
     _notify(progress, 70, f"Запись в {TARGET_SHEET_YQ}")
     writer.write_to_yw2pf(wb, ordered_blocks, acc_df,
                           target_sheet=TARGET_SHEET_YQ, yqj_df=yqj_df)
+    wb.active = wb.sheetnames.index(TARGET_SHEET_YQ)
 
     _notify(progress, 85, "Сохранение…")
     meta = _safe_overwrite_save(wb, str(path))
-    _notify(progress, 100, f"Готово. Бэкап: {meta['backup']}")
+    _notify(progress, 100, "Готово.")
     return PipelineResult(
         result_path=meta["result"],
-        backup_path=meta["backup"],
+        backup_path=meta["result"],
         account_count=len(accounts),
     )
 
@@ -205,6 +209,19 @@ def _read_yw2pf_first_data_row_triggers(
         wb.close()
 
 
+def _target_sheet_has_tail_data(wb: Workbook, target_sheet: str) -> bool:
+    """True, если на целевом листе есть непустые ячейки начиная со строки 4."""
+    if target_sheet not in wb.sheetnames:
+        return False
+    ws = wb[target_sheet]
+    first_tail_row = DATA_START_ROW + 1
+    for r in range(first_tail_row, ws.max_row + 1):
+        for c in range(1, (ws.max_column or 0) + 1):
+            if not _is_blank(ws.cell(row=r, column=c).value):
+                return True
+    return False
+
+
 def _headers_for_block(wb: Workbook, sheet_name: str) -> list:
     if sheet_name not in wb.sheetnames:
         return []
@@ -212,10 +229,10 @@ def _headers_for_block(wb: Workbook, sheet_name: str) -> list:
 
 
 def _safe_overwrite_save(wb: Workbook, original_path: str) -> dict[str, str]:
-    """Сохраняет ``wb`` поверх ``original_path`` с бэкапом и атомарной подменой.
+    """Сохраняет ``wb`` поверх ``original_path`` атомарной подменой.
 
     Returns:
-        ``{'result': путь_к_файлу, 'backup': путь_к_бэкапу}``
+        ``{'result': путь_к_файлу}``
     """
     orig = Path(original_path)
     _assert_file_writable(orig)
@@ -224,8 +241,6 @@ def _safe_overwrite_save(wb: Workbook, original_path: str) -> dict[str, str]:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup = orig.with_name(f"{orig.stem}.backup_{ts}{orig.suffix}")
         shutil.copy2(orig, backup)
-    else:
-        backup = orig
 
     with tempfile.NamedTemporaryFile(
         dir=orig.parent,
@@ -241,9 +256,7 @@ def _safe_overwrite_save(wb: Workbook, original_path: str) -> dict[str, str]:
         if tmp_path.exists():
             tmp_path.unlink()
         raise
-    if MAKE_BACKUP:
-        return {"result": str(orig), "backup": str(backup)}
-    return {"result": str(orig), "backup": str(backup)}
+    return {"result": str(orig)}
 
 
 @dataclass
@@ -294,6 +307,8 @@ def run_pipeline(
 
         if TARGET_SHEET not in wb.sheetnames:
             raise RuntimeError("В книге отсутствует обязательный лист YW2PF.")
+        if _target_sheet_has_tail_data(wb, TARGET_SHEET):
+            raise RuntimeError("Файл уже обрабатывался.")
         if SC_SHEET not in wb.sheetnames:
             raise RuntimeError("В книге отсутствует обязательный лист SCPF.")
 
@@ -358,13 +373,14 @@ def run_pipeline(
 
         _notify(progress, 70, "Запись на YW2PF")
         writer.write_to_yw2pf(wb, ordered_blocks, acc_df)
+        wb.active = wb.sheetnames.index(TARGET_SHEET)
         _notify(progress, 90, "Сохранение…")
 
         meta = _safe_overwrite_save(wb, str(path))
         _notify(progress, 100, "Готово")
         return PipelineResult(
             result_path=meta["result"],
-            backup_path=meta["backup"],
+            backup_path=meta["result"],
             account_count=len(accounts),
         )
     finally:

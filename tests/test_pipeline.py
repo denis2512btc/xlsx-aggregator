@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import pytest
 from openpyxl import load_workbook
 
 from src.core.config import (
@@ -30,12 +31,12 @@ def test_pipeline_runs_on_sample_copy(example_workbook_path) -> None:
     try:
         r = run_pipeline(path)
         assert Path(r.result_path).exists()
-        assert Path(r.backup_path).exists()
-        assert Path(r.backup_path).name.endswith(".xlsx")
+        assert Path(r.backup_path) == path
 
         w = load_workbook(path, data_only=False)
         try:
             ws = w[TARGET_SHEET]
+            assert w.active.title == TARGET_SHEET
             marks = [
                 c.value
                 for c in ws["A"]
@@ -49,3 +50,25 @@ def test_pipeline_runs_on_sample_copy(example_workbook_path) -> None:
         path.unlink(missing_ok=True)
         for p in path.parent.glob(f"{path.stem}.backup_*.xlsx"):
             p.unlink(missing_ok=True)
+
+
+def test_pipeline_rejects_already_processed_file(example_workbook_path) -> None:
+    import os
+
+    fd, name = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    path = Path(name)
+    shutil.copy2(example_workbook_path, path)
+    try:
+        wb = load_workbook(path)
+        try:
+            ws = wb[TARGET_SHEET]
+            ws.cell(row=4, column=1, value="already-processed-tail")
+            wb.save(path)
+        finally:
+            wb.close()
+
+        with pytest.raises(RuntimeError, match="Файл уже обрабатывался"):
+            run_pipeline(path)
+    finally:
+        path.unlink(missing_ok=True)

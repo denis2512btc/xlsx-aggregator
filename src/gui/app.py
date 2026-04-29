@@ -30,10 +30,10 @@ def _open_folder_in_explorer(folder: str) -> None:
         logger.warning("Не удалось открыть папку: %s", e)
 
 
-def _show_done_with_open_folder(backup_path: str) -> None:
-    p = Path(backup_path)
+def _show_done_with_open_folder(result_path: str) -> None:
+    p = Path(result_path)
     folder = str(p.parent)
-    msg = f"Готово. Бэкап: {p.name}\n\nОткрыть папку с файлом?"
+    msg = f"Готово. Файл обработан: {p.name}\n\nОткрыть папку с файлом?"
     if tkmsg.askyesno("Готово", msg, parent=None):
         _open_folder_in_explorer(folder)
 
@@ -99,12 +99,6 @@ class XlsxAggregatorApp(CTk):
     def _on_process(self) -> None:
         if not self._file_path:
             return
-        msg = (
-            f"Файл будет перезаписан. Бэкап будет сохранён как "
-            f"имя_файла.backup_ДД_Время.xlsx рядом с оригиналом.\n\nПродолжить?"
-        )
-        if not tkmsg.askokcancel("Подтверждение", msg, parent=self):
-            return
         self._btn_run.configure(state="disabled")
         self._btn_choose.configure(state="disabled")
         self._bar.set(0)
@@ -150,7 +144,7 @@ class XlsxAggregatorApp(CTk):
                     self._status.set("Статус: готов")
                     self._btn_run.configure(state="normal")
                     self._btn_choose.configure(state="normal")
-                    _show_done_with_open_folder(r.backup_path)
+                    _show_done_with_open_folder(r.result_path)
                 elif item[0] == "err":
                     self._append_log(f"Ошибка: {item[1]}\n{item[2]}")
                     self._status.set("Статус: ошибка")
