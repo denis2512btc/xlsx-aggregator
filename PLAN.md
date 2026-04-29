@@ -20,6 +20,34 @@
 
 ---
 
+## 1.1. Режимы обработки (YW-режим и YQ-режим)
+
+### Детектирование режима
+
+```python
+# pipeline.py
+def detect_mode(wb) -> str:
+    """Возвращает 'YQ' если в книге есть лист YQ2PF, иначе 'YW'."""
+    return "YQ" if "YQ2PF" in wb.sheetnames else "YW"
+```
+
+Детектирование происходит один раз в начале пайплайна; результат передаётся
+во все дочерние функции через параметр `mode: str`.
+
+### Таблица различий YW vs YQ
+
+| Аспект | YW-режим | YQ-режим |
+|--------|----------|----------|
+| Целевой лист | YW2PF | YQ2PF |
+| Обязательные листы-источники | YW3PF, YWJ1PF | YQ3PF (YWJ1PF не используется) |
+| Источники счетов | YW2PF, YW3PF, YWJ1PF | YQ2PF, YQ3PF |
+| Поле условного листа | YW2PRZ2, YW2PRZ5 | YQ2PR2 |
+| Логика условных листов | поле ≠ '' → лист | цифровое → AN4PF; символьное → AN6PF |
+| Блок после ACCOUNTS | — | YQJDATA (YQJPF + YQJOPF + AN41PF) |
+| SCPF и S5PF | без изменений | без изменений |
+
+---
+
 ## 2. Рекомендуемый стек
 
 **Целевая платформа: Windows 10/11.** Всё кроссплатформенно, но выбор и инструкции оптимизированы под Windows.
@@ -259,6 +287,65 @@ ACCOUNT_TABLE_COLUMNS = [
     # ТЗ: «-(S5AIMD+S5AM1D)» — пишется как Excel-формула
     ("S5_NEG_SUM", "COMPUTED"),
 ]
+
+# =============================================================================
+# YQ-режим: константы
+# =============================================================================
+
+TARGET_SHEET_YQ = "YQ2PF"
+
+ALWAYS_APPEND_YQ = ["YQ3PF"]
+"""YWJ1PF в YQ-режиме не используется."""
+
+ACCOUNT_SOURCE_SHEETS_YQ = ["YQ2PF", "YQ3PF"]
+SHEET_FIELD_PREFIX_YQ = {"YQ2PF": "YQ2", "YQ3PF": "YQ3"}
+
+# Разрешённые тройки колонок для YQ-режима (аналог ALLOWED_ACCOUNT_FIELD_TRIPLES).
+# Тройки выявлены из примера файла YQ3PF/YQ2PF; дополнить по реальному ТЗ.
+ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ_ORDERED = (
+    ("YQ3AB2", "YQ3AN2", "YQ3AS2"),
+    ("YQ3AB3", "YQ3AN3", "YQ3AS3"),
+    ("YQ3AB4", "YQ3AN4", "YQ3AS4"),
+    ("YQ3AB5", "YQ3AN5", "YQ3AS5"),
+    ("YQ3AB6", "YQ3AN6", "YQ3AS6"),
+    ("YQ3AB7", "YQ3AN7", "YQ3AS7"),
+    ("YQ3AB8", "YQ3AN8", "YQ3AS8"),
+    ("YQ3ABG", "YQ3ANG", "YQ3ASG"),
+    ("YQ3ABP", "YQ3ANP", "YQ3ASP"),
+    ("YQ3ABN", "YQ3ANN", "YQ3ASN"),
+    ("YQ3ABK", "YQ3ANK", "YQ3ASK"),
+    ("YQ3ABL", "YQ3ANL", "YQ3ASL"),
+    ("YQ3ABM", "YQ3ANM", "YQ3ASM"),
+    ("YQ3ABO", "YQ3ANO", "YQ3ASO"),
+    ("YQ3BB2", "YQ3BN2", "YQ3BS2"),
+    ("YQ3BB3", "YQ3BN3", "YQ3BS3"),
+    ("YQ2AB1", "YQ2AN1", "YQ2AS1"),
+    # … дополнить по реальному ТЗ …
+)
+ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ = frozenset(ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ_ORDERED)
+
+# Поле-триггер условных листов в YQ-режиме
+YQ_CONDITIONAL_TRIGGER = "YQ2PR2"
+"""ТЗ: если значение цифровое → AN4PF; если символьное → AN6PF.
+Если данных в выбранном листе нет (только заголовок) → лист не выводится."""
+
+YQ_CONDITIONAL_NUMERIC_SHEET = "AN4PF"   # лист если YQ2PR2 — число
+YQ_CONDITIONAL_STRING_SHEET  = "AN6PF"   # лист если YQ2PR2 — строка
+
+# Структура YQJDATA (блок после ACCOUNTS в YQ-режиме)
+YQJDATA_BASE_SHEET   = "YQJPF"   # основная таблица
+YQJDATA_OPT_SHEET1   = "YQJOPF"  # LEFT JOIN по (YQJOANR=YQJANR, YQJOSQN=YQJSQN)
+YQJDATA_OPT_SHEET2   = "AN41PF"  # LEFT JOIN по (AN41ANR=YQJANR, AN41SQN=YQJSQN)
+
+YQJDATA_BASE_ANR_COL = "YQJANR"
+YQJDATA_BASE_SQN_COL = "YQJSQN"
+YQJDATA_OPT1_ANR_COL = "YQJOANR"
+YQJDATA_OPT1_SQN_COL = "YQJOSQN"
+YQJDATA_OPT2_ANR_COL = "AN41ANR"
+YQJDATA_OPT2_SQN_COL = "AN41SQN"
+
+YQJDATA_FILTER_FIELD = "YQJSTS"  # поле фильтра (значение ≠ "А")
+YQJDATA_FILTER_VALUE = "А"       # Кириллическая А (не латинская)
 ```
 
 ---
@@ -657,6 +744,111 @@ def safe_overwrite_save(wb, original_path: str) -> dict:
 - Диалог «Готово. Файл обработан. Бэкап: `...backup_20260422_140533.xlsx`» + кнопка «Открыть папку».
 - Политика хранения бэкапов: по умолчанию храним все. Опционально (настройка-галка в UI на будущее) — автоудаление бэкапов старше N дней.
 
+### 6.9. Определение условного листа в YQ-режиме (`pipeline.py`)
+
+```python
+def _is_numeric(v) -> bool:
+    """True если значение — число или строка, приводимая к float."""
+    if isinstance(v, (int, float)):
+        return True
+    try:
+        float(str(v).strip())
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def determine_yq_conditional_sheet(yq2pf_rows: list[dict]) -> str | None:
+    """Возвращает имя условного листа для YQ-режима или None.
+
+    ТЗ: если YQ2PR2 содержит цифровое значение → AN4PF;
+        если символьное → AN6PF;
+        если пусто → ни один лист не добавляется.
+
+    Returns:
+        Имя листа ('AN4PF' | 'AN6PF') или None.
+    """
+    if not yq2pf_rows:
+        return None
+    v = yq2pf_rows[0].get(YQ_CONDITIONAL_TRIGGER)
+    if _is_blank(v):
+        return None
+    return YQ_CONDITIONAL_NUMERIC_SHEET if _is_numeric(v) else YQ_CONDITIONAL_STRING_SHEET
+```
+
+Лист добавляется в `ordered_blocks` **только если** в нём есть хотя бы одна data-строка
+(после применения `read_sheet_as_dicts`); иначе — лог INFO и пропуск.
+
+### 6.10. Построение блока YQJDATA (`joiner.py`)
+
+```python
+def build_yqj_table(
+    yqjpf_rows: list[dict],
+    yqjopf_rows: list[dict],   # может быть пустым — тогда колонки YQJOPF не включаются
+    an41pf_rows: list[dict],   # может быть пустым — тогда колонки AN41PF не включаются
+) -> pd.DataFrame:
+    """LEFT JOIN YQJPF + опционально YQJOPF + опционально AN41PF по (ANR, SQN).
+
+    ТЗ: «вывести данные из таблицы YQJPF, YQJOPF, AN41PF в одной структуре,
+    связав их по ANR и SQN».
+
+    Алгоритм:
+        1. Построить base_df из yqjpf_rows.
+        2. Если yqjopf_rows непустой — LEFT JOIN по
+           (YQJOANR=YQJANR, YQJOSQN=YQJSQN); ключевые дубли из YQJOPF удалить.
+        3. Если an41pf_rows непустой — LEFT JOIN по
+           (AN41ANR=YQJANR, AN41SQN=YQJSQN); ключевые дубли из AN41PF удалить.
+        4. Если оба пусты — вернуть base_df без изменений.
+
+    Порядок колонок: YQJPF-колонки → YQJOPF-колонки (без ANR/SQN) → AN41PF-колонки (без ANR/SQN).
+
+    Returns:
+        DataFrame с объединёнными данными.
+    """
+    base_df = pd.DataFrame(yqjpf_rows)
+
+    if yqjopf_rows:
+        opt1_df = pd.DataFrame(yqjopf_rows).rename(
+            columns={YQJDATA_OPT1_ANR_COL: YQJDATA_BASE_ANR_COL,
+                     YQJDATA_OPT1_SQN_COL: YQJDATA_BASE_SQN_COL}
+        )
+        base_df = base_df.merge(opt1_df, on=[YQJDATA_BASE_ANR_COL, YQJDATA_BASE_SQN_COL], how="left")
+
+    if an41pf_rows:
+        opt2_df = pd.DataFrame(an41pf_rows).rename(
+            columns={YQJDATA_OPT2_ANR_COL: YQJDATA_BASE_ANR_COL,
+                     YQJDATA_OPT2_SQN_COL: YQJDATA_BASE_SQN_COL}
+        )
+        base_df = base_df.merge(opt2_df, on=[YQJDATA_BASE_ANR_COL, YQJDATA_BASE_SQN_COL], how="left")
+
+    return base_df
+```
+
+### 6.11. Запись блока YQJDATA в `writer.py`
+
+- Маркер: `[XA:YQJDATA]` жирным в колонке A; пустая строка перед маркером (`BLOCK_GAP = 1`).
+- Строка заголовков → строки данных → автофильтр на **весь диапазон** (от маркера-заголовка до последней строки данных).
+- Pre-set фильтр YQJSTS ≠ «А» (кириллическая А):
+
+```python
+from openpyxl.worksheet.filters import FilterColumn, CustomFilters, CustomFilter
+
+# После записи всех строк:
+filter_range = f"A{header_row}:{end_col_letter}{data_end_row}"
+ws.auto_filter.ref = filter_range
+
+yqjsts_col_idx = list(yqj_df.columns).index(YQJDATA_FILTER_FIELD)  # 0-based
+fc = FilterColumn(col_id=yqjsts_col_idx)
+fc.customFilters = CustomFilters(
+    customFilter=[CustomFilter(operator="notEqual", val=YQJDATA_FILTER_VALUE)]
+)
+ws.auto_filter.filterColumn.append(fc)
+```
+
+> **Примечание:** openpyxl записывает pre-set фильтр в XML; Excel применяет его при открытии файла.
+> Если при тестировании фильтр не срабатывает — записываем автофильтр без pre-set и документируем
+> в README («после открытия вручную выставить YQJSTS ≠ А»).
+
 ---
 
 ## 7. Обработка ошибок и логирование
@@ -671,6 +863,10 @@ def safe_overwrite_save(wb, original_path: str) -> dict:
 | **Исходный файл открыт в Excel** | `PermissionError` ловим **до любых операций** (см. 6.8) → диалог «Файл занят — закройте его в Excel». Никакой бэкап не создаётся. |
 | Ошибка посреди записи | Временный `.tmp` удаляется. Оригинал не тронут (т.к. `os.replace` ещё не отработал). Бэкап уже существует как дополнительная страховка. |
 | Любая другая ошибка | Полный traceback → `%LOCALAPPDATA%\xlsx_aggregator\logs\error.log`, в UI — короткое сообщение + кнопка «Открыть лог» + путь к бэкапу (если уже создан) |
+| **YQ-режим: нет YQJPF** | Блок YQJDATA не пишется; лог WARNING; остальные блоки записываются |
+| **YQ-режим: YQJOPF или AN41PF отсутствует как лист** | Лог WARNING; блок строится без этого листа (аналогично пустому) |
+| **YQ-режим: YQJOPF/AN41PF есть, но пустой (нет data-строк)** | Колонки этого листа не включаются в структуру YQJDATA |
+| **YQ-режим: нет данных в AN4PF/AN6PF** | Условный блок не пишется; лог INFO |
 
 Логгер — `loguru`, 2 синка: stderr (для dev) + файл с ротацией 5 МБ.
 
@@ -687,6 +883,10 @@ def safe_overwrite_save(wb, original_path: str) -> dict:
 | 3 | **Перезапись исходника**. Перед записью автоматический бэкап `*.backup_<timestamp>.xlsx` + атомарная запись через `.tmp` + `os.replace` (см. 6.8). |
 | 4 | **Идемпотентность при повторных запусках:** блоки маркируются `[XA:<имя>]` в колонке A. Перед записью все строки от первого маркера и ниже чистятся (см. `_strip_previous_run` в 6.6). |
 | 5 | **Счета с PF-листов:** извлекаются только тройки колонок из `ALLOWED_ACCOUNT_FIELD_TRIPLES`; порядок строк в таблице ACCOUNTS = `ALLOWED_ACCOUNT_FIELD_TRIPLES_ORDERED`; первая колонка таблицы — «Ключ полей PF» (`имя1-имя2-имя3`). |
+| 6 | **Детектирование режима по наличию листа:** если в книге есть `YQ2PF` — YQ-режим, иначе YW-режим. |
+| 7 | **Условные листы YQ-режима:** триггер `YQ2PR2`; цифровое значение → AN4PF; символьное → AN6PF; пусто → никакой лист не добавляется. Лист добавляется только если в нём есть data-строки. |
+| 8 | **YQJDATA:** блок YQJPF + YQJOPF + AN41PF через LEFT JOIN по (ANR, SQN); YQJOPF/AN41PF включаются только при наличии data-строк. Pre-set фильтр YQJSTS ≠ «А» (кириллическая А). |
+| 9 | **ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ:** отдельный allowlist для YQ-режима, конфигурируется в `config.py`. |
 
 ### 8.2. Мелкие вопросы (не блокируют старт — закладываю дефолт, скажи если не подходит)
 
@@ -786,6 +986,12 @@ pytest -v tests/
 | 11 | Интеграционный тест на примере `Пример_файла.xlsx` + синтетический кейс с YWJ1PF, содержащим 0 и 5 записей | `tests/test_pipeline.py` | End-to-end проверка: все блоки на месте, автофильтр применён, переменное число записей обработано корректно |
 | 12 | Сборка `.exe` через PyInstaller (`build.bat`, one-folder) | `build.bat` | `dist\XLSX Aggregator\XLSX Aggregator.exe` запускается двойным кликом на чистой Windows без установленного Python |
 | 13 | README.md: скриншоты, how-to, примечание про Windows Defender и путь логов `%LOCALAPPDATA%\xlsx_aggregator\logs\` | `README.md` | Новый пользователь может всё поставить и собрать |
+| 14 | YQ-константы в `config.py` | `src/core/config.py` | Полный набор YQ-констант: ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ, YQJDATA_*, YQ_CONDITIONAL_* |
+| 15 | `detect_mode()` + параметризация пайплайна по режиму | `src/core/pipeline.py` | Пайплайн определяет режим (YW/YQ) и передаёт его в дочерние функции через `mode: str` |
+| 16 | `determine_yq_conditional_sheet()` — выбор AN4PF/AN6PF по типу YQ2PR2 | `src/core/pipeline.py` | Цифровое значение → AN4PF, символьное → AN6PF; пусто или нет данных → пропуск |
+| 17 | `build_yqj_table()` — LEFT JOIN YQJPF + YQJOPF + AN41PF | `src/core/joiner.py` | DataFrame объединённой структуры с опциональными листами |
+| 18 | Запись блока `[XA:YQJDATA]` + автофильтр + pre-set фильтр YQJSTS ≠ А | `src/core/writer.py` | Блок с маркером, фильтром на весь диапазон, YQJSTS ≠ А при открытии |
+| 19 | Интеграционный тест YQ-режима на `AMSAV2026-04-16-16.28.32.264864.xlsx` | `tests/test_pipeline_yq.py` | Все блоки на месте, YQJDATA записана, режим определён верно; опциональные листы обрабатываются |
 
 ---
 
@@ -803,3 +1009,8 @@ pytest -v tests/
 - [ ] Приложение собирается в `.exe` (PyInstaller one-folder) и запускается на чистой Windows без установленного Python.
 - [ ] Логи сохраняются в `%LOCALAPPDATA%\xlsx_aggregator\logs\`.
 - [ ] Обработан кейс с переменным числом data-строк на YWJ1PF (проверено тестом с 0, 1 и N записями).
+- [ ] **YQ-режим:** при открытии файла с листом YQ2PF приложение автоматически переходит в YQ-режим.
+- [ ] **YQ-режим:** на YQ2PF добавляется блок YQ3PF; YWJ1PF не добавляется.
+- [ ] **YQ-режим:** условный лист (AN4PF или AN6PF) добавляется только при непустом YQ2PR2 и наличии данных в листе.
+- [ ] **YQ-режим:** блок YQJDATA содержит колонки YQJPF + (YQJOPF если есть данные) + (AN41PF если есть данные).
+- [ ] **YQ-режим:** на блок YQJDATA наложен автофильтр на весь диапазон; pre-set фильтр YQJSTS ≠ А активен при открытии файла.

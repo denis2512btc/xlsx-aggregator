@@ -171,3 +171,61 @@ SCPF_MERGE_COLUMNS = [
 
 # Колонки S5PF для merge (ключ переименовывается в joiner)
 S5PF_MERGE_COLUMNS = ["S5AB", "S5AN", "S5AS", "S5BAL", "S5AIMD", "S5AM1D"]
+
+# =============================================================================
+# YQ-режим: константы
+# =============================================================================
+
+TARGET_SHEET_YQ = "YQ2PF"
+
+ALWAYS_APPEND_YQ = ["YQ3PF"]
+"""YWJ1PF в YQ-режиме не используется."""
+
+ACCOUNT_SOURCE_SHEETS_YQ = ["YQ2PF", "YQ3PF"]
+SHEET_FIELD_PREFIX_YQ: dict[str, str] = {"YQ2PF": "YQ2", "YQ3PF": "YQ3"}
+
+ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ_ORDERED: tuple[tuple[str, str, str], ...] = (
+    ("YQ3AB2", "YQ3AN2", "YQ3AS2"),
+    ("YQ3AB3", "YQ3AN3", "YQ3AS3"),
+    ("YQ3AB4", "YQ3AN4", "YQ3AS4"),
+    ("YQ3AB5", "YQ3AN5", "YQ3AS5"),
+    ("YQ3AB6", "YQ3AN6", "YQ3AS6"),
+    ("YQ3AB7", "YQ3AN7", "YQ3AS7"),
+    ("YQ3AB8", "YQ3AN8", "YQ3AS8"),
+    ("YQ3ABG", "YQ3ANG", "YQ3ASG"),
+    ("YQ3ABP", "YQ3ANP", "YQ3ASP"),
+    ("YQ3ABN", "YQ3ANN", "YQ3ASN"),
+    ("YQ3ABK", "YQ3ANK", "YQ3ASK"),
+    ("YQ3ABL", "YQ3ANL", "YQ3ASL"),
+    ("YQ3ABM", "YQ3ANM", "YQ3ASM"),
+    ("YQ3ABO", "YQ3ANO", "YQ3ASO"),
+    ("YQ3BB2", "YQ3BN2", "YQ3BS2"),
+    ("YQ3BB3", "YQ3BN3", "YQ3BS3"),
+    ("YQ2AB1", "YQ2AN1", "YQ2AS1"),
+)
+"""Порядок троек YQ-режима: строки ACCOUNTS сортируются так же."""
+
+ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ: frozenset[tuple[str, str, str]] = frozenset(
+    ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ_ORDERED
+)
+"""Allowlist для YQ-режима (аналог ALLOWED_ACCOUNT_FIELD_TRIPLES для YW)."""
+
+YQ_CONDITIONAL_TRIGGER = "YQ2PR2"
+"""ТЗ: если значение цифровое → AN4PF; если символьное → AN6PF; пусто → никакой лист."""
+
+YQ_CONDITIONAL_NUMERIC_SHEET = "AN4PF"
+YQ_CONDITIONAL_STRING_SHEET = "AN6PF"
+
+YQJDATA_BASE_SHEET = "YQJPF"
+YQJDATA_OPT_SHEET1 = "YQJOPF"   # LEFT JOIN по (YQJOANR=YQJANR, YQJOSQN=YQJSQN)
+YQJDATA_OPT_SHEET2 = "AN41PF"   # LEFT JOIN по (AN41ANR=YQJANR, AN41SQN=YQJSQN)
+
+YQJDATA_BASE_ANR_COL = "YQJANR"
+YQJDATA_BASE_SQN_COL = "YQJSQN"
+YQJDATA_OPT1_ANR_COL = "YQJOANR"
+YQJDATA_OPT1_SQN_COL = "YQJOSQN"
+YQJDATA_OPT2_ANR_COL = "AN41ANR"
+YQJDATA_OPT2_SQN_COL = "AN41SQN"
+
+YQJDATA_FILTER_FIELD = "YQJSTS"
+YQJDATA_FILTER_VALUE = "А"  # Кириллическая А (не латинская)

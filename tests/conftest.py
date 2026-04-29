@@ -12,9 +12,13 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _first_xlsx() -> Path | None:
-    """Первый ``*.xlsx`` в ``fixtures/`` (файлы в git не храним — только локально)."""
-    for p in _FIXTURES.glob("*.xlsx"):
-        return p
+    """Первый ``*.xlsx`` в ``fixtures/``, подходящий для YW-режима.
+
+    Исключает YQ-файлы (AMSAV*), которые не содержат листа YW2PF.
+    """
+    for p in sorted(_FIXTURES.glob("*.xlsx")):
+        if not p.name.startswith("AMSAV"):
+            return p
     return None
 
 

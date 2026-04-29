@@ -16,15 +16,24 @@ from openpyxl import load_workbook
 from openpyxl.workbook.workbook import Workbook
 
 from src.core import joiner, writer
-from src.core.account_extractor import extract_all_accounts
+from src.core.account_extractor import extract_all_accounts, extract_all_accounts_yq
 from src.core.config import (
     ALWAYS_APPEND,
+    ALWAYS_APPEND_YQ,
+    ACCOUNT_SOURCE_SHEETS,
+    ACCOUNT_SOURCE_SHEETS_YQ,
     CONDITIONAL_APPEND,
+    MAKE_BACKUP,
     S5_SHEET,
     SC_SHEET,
     TARGET_SHEET,
-    ACCOUNT_SOURCE_SHEETS,
-    MAKE_BACKUP,
+    TARGET_SHEET_YQ,
+    YQJDATA_BASE_SHEET,
+    YQJDATA_OPT_SHEET1,
+    YQJDATA_OPT_SHEET2,
+    YQ_CONDITIONAL_NUMERIC_SHEET,
+    YQ_CONDITIONAL_STRING_SHEET,
+    YQ_CONDITIONAL_TRIGGER,
 )
 from src.core.sheet_reader import read_sheet_as_dicts, sheet_headers_list
 
@@ -36,6 +45,121 @@ def _is_blank(v: object) -> bool:
         return True
     s = str(v).strip()
     return s == ""
+
+
+def detect_mode(wb: Workbook) -> str:
+    """Возвращает ``'YQ'`` если в книге есть лист YQ2PF, иначе ``'YW'``."""
+    return "YQ" if TARGET_SHEET_YQ in wb.sheetnames else "YW"
+
+
+def _is_numeric(v: object) -> bool:
+    if isinstance(v, (int, float)):
+        return True
+    try:
+        float(str(v).strip())
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def determine_yq_conditional_sheet(yq2pf_rows: list[dict]) -> str | None:
+    """Возвращает имя условного листа для YQ-режима или ``None``.
+
+    ТЗ: если ``YQ2PR2`` цифровое → AN4PF; символьное → AN6PF; пусто → None.
+    """
+    if not yq2pf_rows:
+        return None
+    v = yq2pf_rows[0].get(YQ_CONDITIONAL_TRIGGER)
+    if _is_blank(v):
+        return None
+    return YQ_CONDITIONAL_NUMERIC_SHEET if _is_numeric(v) else YQ_CONDITIONAL_STRING_SHEET
+
+
+def _run_yq_pipeline(wb: Workbook, path: Path, progress: "ProgressFn | None") -> "PipelineResult":
+    """YQ-ветка пайплайна: целевой лист YQ2PF.
+
+    ТЗ: YQ-режим активируется при наличии листа YQ2PF вместо YW2PF;
+    источники счетов — YQ2PF, YQ3PF; условный лист — AN4PF или AN6PF;
+    после ACCOUNTS — блок YQJDATA.
+    """
+    _notify(progress, 10, "YQ-режим: чтение листов")
+
+    if TARGET_SHEET_YQ not in wb.sheetnames:
+        raise RuntimeError(f"В книге отсутствует лист {TARGET_SHEET_YQ}.")
+    if SC_SHEET not in wb.sheetnames:
+        raise RuntimeError("В книге отсутствует обязательный лист SCPF.")
+
+    yq2pf_rows = read_sheet_as_dicts(wb, TARGET_SHEET_YQ)
+    cond_sheet = determine_yq_conditional_sheet(yq2pf_rows)
+
+    sheets: dict[str, list[dict]] = {}
+    for sn in ACCOUNT_SOURCE_SHEETS_YQ:
+        if sn in wb.sheetnames:
+            sheets[sn] = read_sheet_as_dicts(wb, sn)
+
+    _notify(progress, 25, "YQ-режим: извлечение счетов")
+    accounts = extract_all_accounts_yq(sheets)
+
+    sc_rows = read_sheet_as_dicts(wb, SC_SHEET)
+    s5_rows = read_sheet_as_dicts(wb, S5_SHEET) if S5_SHEET in wb.sheetnames else []
+    if not s5_rows:
+        logger.warning("Лист S5PF отсутствует или пуст — колонки S5* будут пустыми.")
+
+    acc_df = joiner.build_account_table(
+        accounts, sc_rows, s5_rows,
+        col_order=joiner._ACCOUNT_COL_ORDER_YQ,
+    ) if accounts else None
+    _notify(progress, 40, f"Счетов: {len(accounts)}")
+
+    ordered_blocks: list[tuple[str, list, list[dict]]] = []
+
+    for sn in ALWAYS_APPEND_YQ:
+        if sn in wb.sheetnames:
+            ordered_blocks.append((sn, list(sheet_headers_list(wb, sn)), read_sheet_as_dicts(wb, sn)))
+        else:
+            logger.warning("Лист %s отсутствует — блок пропущен.", sn)
+
+    if cond_sheet:
+        if cond_sheet in wb.sheetnames:
+            cond_rows = read_sheet_as_dicts(wb, cond_sheet)
+            if cond_rows:
+                ordered_blocks.append((cond_sheet, list(sheet_headers_list(wb, cond_sheet)), cond_rows))
+            else:
+                logger.info("Лист %s пустой — не выводится.", cond_sheet)
+        else:
+            logger.warning("Условный лист %s отсутствует.", cond_sheet)
+
+    _notify(progress, 55, "YQ-режим: построение YQJDATA")
+    yqj_df = None
+    if YQJDATA_BASE_SHEET in wb.sheetnames:
+        yqjpf_rows = read_sheet_as_dicts(wb, YQJDATA_BASE_SHEET)
+        if yqjpf_rows:
+            yqjopf_rows = (
+                read_sheet_as_dicts(wb, YQJDATA_OPT_SHEET1)
+                if YQJDATA_OPT_SHEET1 in wb.sheetnames else []
+            )
+            an41pf_rows = (
+                read_sheet_as_dicts(wb, YQJDATA_OPT_SHEET2)
+                if YQJDATA_OPT_SHEET2 in wb.sheetnames else []
+            )
+            yqj_df = joiner.build_yqj_table(yqjpf_rows, yqjopf_rows, an41pf_rows)
+        else:
+            logger.warning("YQJPF пустой — блок YQJDATA не пишется.")
+    else:
+        logger.warning("Лист %s отсутствует — блок YQJDATA не пишется.", YQJDATA_BASE_SHEET)
+
+    _notify(progress, 70, f"Запись в {TARGET_SHEET_YQ}")
+    writer.write_to_yw2pf(wb, ordered_blocks, acc_df,
+                          target_sheet=TARGET_SHEET_YQ, yqj_df=yqj_df)
+
+    _notify(progress, 85, "Сохранение…")
+    meta = _safe_overwrite_save(wb, str(path))
+    _notify(progress, 100, f"Готово. Бэкап: {meta['backup']}")
+    return PipelineResult(
+        result_path=meta["result"],
+        backup_path=meta["backup"],
+        account_count=len(accounts),
+    )
 
 
 def _notify(progress: ProgressFn | None, pct: int, msg: str) -> None:
@@ -163,6 +287,11 @@ def run_pipeline(
 
     wb = load_workbook(path, data_only=False)
     try:
+        mode = detect_mode(wb)
+        logger.info("Режим обработки: %s", mode)
+        if mode == "YQ":
+            return _run_yq_pipeline(wb, path, progress)
+
         if TARGET_SHEET not in wb.sheetnames:
             raise RuntimeError("В книге отсутствует обязательный лист YW2PF.")
         if SC_SHEET not in wb.sheetnames:

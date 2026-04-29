@@ -16,6 +16,8 @@ from src.core.config import (
     BLOCK_MARKER_SUFFIX,
     ACCOUNT_COMPUTED_HEADER,
     TARGET_SHEET,
+    YQJDATA_FILTER_FIELD,
+    YQJDATA_FILTER_VALUE,
 )
 
 bold = Font(bold=True)
@@ -71,12 +73,15 @@ def write_to_yw2pf(
     wb: Workbook,
     ordered_blocks: list[tuple[str, list, list[dict]]],
     account_df: pd.DataFrame | None,
+    *,
+    target_sheet: str | None = None,
+    yqj_df: pd.DataFrame | None = None,
 ) -> None:
-    """Пишет блоки листов и опционально таблицу счетов на ``YW2PF``.
+    """Пишет блоки листов и опционально таблицу счетов на целевой лист.
 
     ТЗ: не трогать существующие строки выше; маркер ``[XA:`` — граница
     идемпотентности; таблица счетов с формулой ``-(S5AIMD+S5AM1D)``;
-    автофильтр только на таблицу ``ACCOUNTS``.
+    автофильтр на таблицу ``ACCOUNTS`` (YW-режим) или ``YQJDATA`` (YQ-режим).
 
     Args:
         wb: Книга (``data_only=False``).
@@ -84,8 +89,11 @@ def write_to_yw2pf(
             исходного листа, ``rows`` — список dict по данным.
         account_df: Таблица из ``build_account_table``; если ``None`` или пустая —
             блок ``ACCOUNTS`` не пишется.
+        target_sheet: Имя целевого листа; по умолчанию ``TARGET_SHEET`` (YW2PF).
+        yqj_df: Объединённая таблица YQJDATA (только YQ-режим); если передана —
+            пишется после ACCOUNTS с автофильтром и pre-set YQJSTS ≠ «А».
     """
-    ws = wb[TARGET_SHEET]
+    ws = wb[target_sheet or TARGET_SHEET]
     _strip_previous_run(ws)
 
     cursor = _find_last_nonempty_row(ws) + 1 + BLOCK_GAP
@@ -106,10 +114,15 @@ def write_to_yw2pf(
             cursor += 1
         cursor += BLOCK_GAP
 
+    sheet_label = target_sheet or TARGET_SHEET
     if account_df is None or account_df.empty:
-        logger.info("Счетов нет — блок ACCOUNTS на YW2PF не записывается.")
+        logger.info("Счетов нет — блок ACCOUNTS на {} не записывается.", sheet_label)
     else:
-        _write_account_table(ws, account_df, cursor)
+        cursor = _write_account_table(ws, account_df, cursor)
+
+    if yqj_df is not None and not yqj_df.empty:
+        _write_yqjdata_block(ws, yqj_df, cursor)
+
     _apply_workbook_calc_flags(wb)
 
 
@@ -158,4 +171,55 @@ def _write_account_table(ws: Worksheet, account_df: pd.DataFrame, start_row: int
     start_letter = get_column_letter(1)
     end_letter = get_column_letter(neg_col_idx)
     ws.auto_filter.ref = f"{start_letter}{header_row}:{end_letter}{data_end}"
+    return cursor
+
+
+def _write_yqjdata_block(ws: Worksheet, yqj_df: pd.DataFrame, start_row: int) -> int:
+    """Пишет блок ``[XA:YQJDATA]`` с автофильтром и pre-set YQJSTS ≠ «А».
+
+    ТЗ: «вывести данные YQJPF, YQJOPF, AN41PF; фильтр на всю структуру;
+    фильтр YQJSTS ≠ «А»».
+
+    Args:
+        ws: Целевой лист (YQ2PF).
+        yqj_df: DataFrame из ``build_yqj_table``.
+        start_row: Строка, с которой начинается запись (включая BLOCK_GAP-отступ).
+
+    Returns:
+        Следующая свободная строка после последней строки данных.
+    """
+    from openpyxl.worksheet.filters import CustomFilter, CustomFilters, FilterColumn
+
+    cursor = start_row + BLOCK_GAP
+    ws.cell(
+        row=cursor,
+        column=1,
+        value=f"{BLOCK_MARKER_PREFIX}YQJDATA{BLOCK_MARKER_SUFFIX}",
+    ).font = bold
+    cursor += 1
+
+    headers = list(yqj_df.columns)
+    header_row = cursor
+    for ci, h in enumerate(headers, start=1):
+        ws.cell(row=cursor, column=ci, value=h).font = bold
+    cursor += 1
+
+    for _, rec in yqj_df.iterrows():
+        for ci, col in enumerate(headers, start=1):
+            val = rec[col]
+            ws.cell(row=cursor, column=ci, value=val if pd.notna(val) else None)
+        cursor += 1
+    data_end = cursor - 1
+
+    end_col_letter = get_column_letter(len(headers))
+    ws.auto_filter.ref = f"A{header_row}:{end_col_letter}{data_end}"
+
+    if YQJDATA_FILTER_FIELD in headers:
+        col_idx = headers.index(YQJDATA_FILTER_FIELD)  # 0-based для FilterColumn
+        fc = FilterColumn(colId=col_idx)
+        fc.customFilters = CustomFilters(
+            customFilter=[CustomFilter(operator="notEqual", val=YQJDATA_FILTER_VALUE)]
+        )
+        ws.auto_filter.filterColumn.append(fc)
+
     return cursor

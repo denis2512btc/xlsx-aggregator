@@ -7,8 +7,11 @@ from typing import Literal
 
 from src.core.config import (
     ACCOUNT_SOURCE_SHEETS,
+    ACCOUNT_SOURCE_SHEETS_YQ,
     ALLOWED_ACCOUNT_FIELD_TRIPLES,
+    ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ,
     SHEET_FIELD_PREFIX,
+    SHEET_FIELD_PREFIX_YQ,
 )
 
 
@@ -99,4 +102,39 @@ def extract_all_accounts(
                 if any(triple):
                     col_key = (c1, c2, c3)
                     accounts.add((col_key, triple))
+    return accounts
+
+
+def extract_all_accounts_yq(
+    sheets: dict[str, list[dict[str, object]]],
+) -> set[tuple[tuple[str, str, str], tuple[str, str, str]]]:
+    """Аналог ``extract_all_accounts`` для YQ-режима.
+
+    ТЗ: источники счетов в YQ-режиме — YQ2PF и YQ3PF; allowlist —
+    ``ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ``; префиксы — ``SHEET_FIELD_PREFIX_YQ``.
+
+    Args:
+        sheets: ``{имя_листа: [row_dict, ...]}`` — как из ``read_sheet_as_dicts``.
+
+    Returns:
+        Множество элементов ``((c_AB, c_AN, c_AS), (SCAB, SCAN, SCAS))``.
+    """
+    accounts: set[tuple[tuple[str, str, str], tuple[str, str, str]]] = set()
+    for sheet_name in ACCOUNT_SOURCE_SHEETS_YQ:
+        if sheet_name not in SHEET_FIELD_PREFIX_YQ:
+            continue
+        sheet_prefix = SHEET_FIELD_PREFIX_YQ[sheet_name]
+        rows = sheets.get(sheet_name) or []
+        if not rows:
+            continue
+        headers = list(rows[0].keys())
+        slots = extract_account_slots(headers, sheet_prefix)
+        for row in rows:
+            for _slot_id, _group, (c1, c2, c3) in slots:
+                if (c1, c2, c3) not in ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ:
+                    continue
+                v1, v2, v3 = row.get(c1), row.get(c2), row.get(c3)
+                triple = (_norm(v1), _norm(v2), _norm(v3))
+                if any(triple):
+                    accounts.add(((c1, c2, c3), triple))
     return accounts

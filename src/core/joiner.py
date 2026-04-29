@@ -8,12 +8,23 @@ from loguru import logger
 from src.core.config import (
     ACCOUNT_FIELD_KEY_HEADER,
     ALLOWED_ACCOUNT_FIELD_TRIPLES_ORDERED,
+    ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ_ORDERED,
     SCPF_MERGE_COLUMNS,
     S5PF_MERGE_COLUMNS,
+    YQJDATA_BASE_ANR_COL,
+    YQJDATA_BASE_SQN_COL,
+    YQJDATA_OPT1_ANR_COL,
+    YQJDATA_OPT1_SQN_COL,
+    YQJDATA_OPT2_ANR_COL,
+    YQJDATA_OPT2_SQN_COL,
 )
 
 _ACCOUNT_COL_ORDER: dict[tuple[str, str, str], int] = {
     t: i for i, t in enumerate(ALLOWED_ACCOUNT_FIELD_TRIPLES_ORDERED)
+}
+
+_ACCOUNT_COL_ORDER_YQ: dict[tuple[str, str, str], int] = {
+    t: i for i, t in enumerate(ALLOWED_ACCOUNT_FIELD_TRIPLES_YQ_ORDERED)
 }
 
 
@@ -21,6 +32,8 @@ def build_account_table(
     accounts: set[tuple[tuple[str, str, str], tuple[str, str, str]]],
     sc_rows: list[dict],
     s5_rows: list[dict],
+    *,
+    col_order: dict[tuple[str, str, str], int] | None = None,
 ) -> pd.DataFrame:
     """Строит итоговую таблицу счетов через LEFT JOIN SCPF + LEFT JOIN S5PF.
 
@@ -61,11 +74,13 @@ def build_account_table(
             ]
         )
 
+    effective_order = col_order if col_order is not None else _ACCOUNT_COL_ORDER
+
     def _acc_sort_key(
         item: tuple[tuple[str, str, str], tuple[str, str, str]],
     ) -> tuple[int, tuple[str, str, str]]:
         cols, _vals = item
-        return (_ACCOUNT_COL_ORDER.get(cols, 10**9), cols)
+        return (effective_order.get(cols, 10**9), cols)
 
     rows_sorted = sorted(accounts, key=_acc_sort_key)
     acc_df = pd.DataFrame(
@@ -166,3 +181,51 @@ def _cell_str(v: object) -> str:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return ""
     return str(v).strip()
+
+
+def build_yqj_table(
+    yqjpf_rows: list[dict],
+    yqjopf_rows: list[dict],
+    an41pf_rows: list[dict],
+) -> pd.DataFrame:
+    """LEFT JOIN YQJPF + опционально YQJOPF + AN41PF по (ANR, SQN).
+
+    ТЗ: «вывести данные из таблицы YQJPF, YQJOPF, AN41PF в одной структуре,
+    связав их по ANR и SQN».
+
+    Опциональный лист включается только если его rows непустой.
+    Порядок колонок: YQJPF → YQJOPF (без ключей-дублей) → AN41PF (без дублей).
+
+    Args:
+        yqjpf_rows: Данные основного листа YQJPF.
+        yqjopf_rows: Данные YQJOPF; пустой список — лист не включается.
+        an41pf_rows: Данные AN41PF; пустой список — лист не включается.
+
+    Returns:
+        DataFrame с объединёнными данными.
+    """
+    base_df = pd.DataFrame(yqjpf_rows)
+
+    if yqjopf_rows:
+        opt1 = pd.DataFrame(yqjopf_rows).rename(
+            columns={
+                YQJDATA_OPT1_ANR_COL: YQJDATA_BASE_ANR_COL,
+                YQJDATA_OPT1_SQN_COL: YQJDATA_BASE_SQN_COL,
+            }
+        )
+        base_df = base_df.merge(
+            opt1, on=[YQJDATA_BASE_ANR_COL, YQJDATA_BASE_SQN_COL], how="left"
+        )
+
+    if an41pf_rows:
+        opt2 = pd.DataFrame(an41pf_rows).rename(
+            columns={
+                YQJDATA_OPT2_ANR_COL: YQJDATA_BASE_ANR_COL,
+                YQJDATA_OPT2_SQN_COL: YQJDATA_BASE_SQN_COL,
+            }
+        )
+        base_df = base_df.merge(
+            opt2, on=[YQJDATA_BASE_ANR_COL, YQJDATA_BASE_SQN_COL], how="left"
+        )
+
+    return base_df
